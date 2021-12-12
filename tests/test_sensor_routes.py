@@ -26,10 +26,19 @@ class SensorRoutesTestCases(unittest.TestCase):
                     (self.device_uuid, 'temperature', 50, int(time.time()) - 50))
         cur.execute('insert into readings (device_uuid,type,value,date_created) VALUES (?,?,?,?)',
                     (self.device_uuid, 'temperature', 100, int(time.time())))
+        cur.execute('insert into readings (device_uuid,type,value,date_created) VALUES (?,?,?,?)',
+                    (self.device_uuid, 'humidity', 22, int(time.time()) - 100))
+        cur.execute('insert into readings (device_uuid,type,value,date_created) VALUES (?,?,?,?)',
+                    (self.device_uuid, 'humidity', 50, int(time.time()) - 50))
+        cur.execute('insert into readings (device_uuid,type,value,date_created) VALUES (?,?,?,?)',
+                    (self.device_uuid, 'humidity', 100, int(time.time())))
 
         cur.execute('insert into readings (device_uuid,type,value,date_created) VALUES (?,?,?,?)',
                     ('other_uuid', 'temperature', 22, int(time.time())))
+        cur.execute('insert into readings (device_uuid,type,value,date_created) VALUES (?,?,?,?)',
+                    ('other_uuid', 'humidity', 42, int(time.time())))
         conn.commit()
+        conn.close()
 
         app.config['TESTING'] = True
 
@@ -44,7 +53,7 @@ class SensorRoutesTestCases(unittest.TestCase):
         self.assertEqual(request.status_code, 200)
 
         # And the response data should have three sensor readings
-        self.assertTrue(len(json.loads(request.data)) == 3)
+        assert len(request.json) == 6
 
     def test_device_readings_post(self):
         # Given a device UUID
@@ -56,7 +65,7 @@ class SensorRoutesTestCases(unittest.TestCase):
             }))
 
         # Then we should receive a 201
-        self.assertEqual(request.status_code, 201)
+        self.assertEqual(201, request.status_code, request.data)
 
         # And when we check for readings in the db
         conn = sqlite3.connect('test_database.db')
@@ -66,21 +75,28 @@ class SensorRoutesTestCases(unittest.TestCase):
         rows = cur.fetchall()
 
         # We should have three
-        self.assertTrue(len(rows) == 4)
+        assert len(rows) == 7
 
     def test_device_readings_get_temperature(self):
         """
         This test should be implemented. The goal is to test that
         we are able to query for a device's temperature data only.
         """
-        self.assertTrue(False)
+
+        request = self.client().get(f'/devices/{self.device_uuid}/readings/?type=temperature')
+
+        assert request.status_code == 200
+        assert len(request.json) == 3
 
     def test_device_readings_get_humidity(self):
         """
         This test should be implemented. The goal is to test that
         we are able to query for a device's humidity data only.
         """
-        self.assertTrue(False)
+        request = self.client().get(f'/devices/{self.device_uuid}/readings/?type=humidity')
+
+        assert request.status_code == 200
+        assert len(request.json) == 3
 
     def test_device_readings_get_past_dates(self):
         """
@@ -89,42 +105,63 @@ class SensorRoutesTestCases(unittest.TestCase):
         a specific date range. We should only get the readings
         that were created in this time range.
         """
-        self.assertTrue(False)
+        start = int(time.time()) - 120
+        end = int(time.time()) - 50
+
+        request = self.client().get(f'/devices/{self.device_uuid}/readings/?start={start}&end={end}')
+
+        assert request.status_code == 200
+        assert len(request.json) == 2
 
     def test_device_readings_min(self):
         """
         This test should be implemented. The goal is to test that
         we are able to query for a device's min sensor reading.
         """
-        self.assertTrue(False)
+        request = self.client().get(f'/devices/{self.device_uuid}/readings/min/?type=temperature')
+
+        assert request.status_code == 200
+        assert request.json['value'] == 22
 
     def test_device_readings_max(self):
         """
         This test should be implemented. The goal is to test that
         we are able to query for a device's max sensor reading.
         """
-        self.assertTrue(False)
+        request = self.client().get(f'/devices/{self.device_uuid}/readings/max/?type=temperature')
+
+        assert request.status_code == 200
+        assert request.json['value'] == 100
 
     def test_device_readings_median(self):
         """
         This test should be implemented. The goal is to test that
         we are able to query for a device's median sensor reading.
         """
-        self.assertTrue(False)
+        request = self.client().get(f'/devices/{self.device_uuid}/readings/median/?type=temperature')
+
+        assert request.status_code == 200
+        assert request.json['value'] == 50
 
     def test_device_readings_mean(self):
         """
         This test should be implemented. The goal is to test that
         we are able to query for a device's mean sensor reading value.
         """
-        self.assertTrue(False)
+        request = self.client().get(f'/devices/{self.device_uuid}/readings/mean/?type=temperature')
+
+        assert request.status_code == 200
+        assert request.json['value'] == 57.33
 
     def test_device_readings_mode(self):
         """
         This test should be implemented. The goal is to test that
         we are able to query for a device's mode sensor reading value.
         """
-        self.assertTrue(False)
+        request = self.client().get(f'/devices/{self.device_uuid}/readings/mode/?type=temperature')
+
+        assert request.status_code == 200
+        assert request.json['value'] == 100
 
     def test_device_readings_quartiles(self):
         """
@@ -132,4 +169,9 @@ class SensorRoutesTestCases(unittest.TestCase):
         we are able to query for a device's 1st and 3rd quartile
         sensor reading value.
         """
-        self.assertTrue(False)
+        start = int(time.time()) - 120
+        end = int(time.time())
+        request = self.client().get(f'/devices/{self.device_uuid}/readings/quartiles/?type=temperature&start={start}&end={end}')
+
+        assert request.status_code == 200
+        assert request.json == {'quartile_1': 22, 'quartile_3': 50}

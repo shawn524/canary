@@ -1,3 +1,6 @@
 /.pytest_cache/
 /venv/
 /.idea/
+/database.db
+/database.db-journal
+/test_database.db
