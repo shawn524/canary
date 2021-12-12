@@ -6,6 +6,7 @@ import time
 
 app = Flask(__name__)
 
+
 # # Setup the SQLite DB
 # conn = sqlite3.connect('database.db')
 # conn.execute('CREATE TABLE IF NOT EXISTS readings (device_uuid TEXT, type TEXT, value INTEGER, date_created INTEGER)')
@@ -43,6 +44,93 @@ def valid_epoch(epoch):
         return False
     else:
         return True
+
+
+def get_metric(metric, device_uuid, sensor_type, start, end):
+    cur, _ = db_connection()
+
+    maybe_start_clause = ""
+    maybe_end_clause = ""
+    maybe_sensor_clause = ""
+    if start is not None:
+        maybe_start_clause = f"AND date_created > {start}"
+    if end is not None:
+        maybe_end_clause = f"AND date_created < {end}"
+    if sensor_type is not None:
+        maybe_sensor_clause = f'AND type = "{sensor_type}"'
+
+    if metric == "min":
+        cur.execute(
+            f'SELECT MIN(value) FROM readings WHERE '
+            f'device_uuid= "{device_uuid}" {maybe_sensor_clause} {maybe_start_clause} {maybe_end_clause}')
+    elif metric == "max":
+        cur.execute(
+            f'SELECT MAX(value) FROM readings WHERE '
+            f'device_uuid= "{device_uuid}" {maybe_sensor_clause} {maybe_start_clause} {maybe_end_clause}')
+    elif metric == "median":
+        cur.execute(
+            f'SELECT value FROM readings WHERE device_uuid="{device_uuid}" '
+            f'{maybe_sensor_clause} {maybe_start_clause} {maybe_end_clause} ORDER BY '
+            f'value LIMIT 1 OFFSET (SELECT COUNT(*) FROM readings WHERE '
+            f'device_uuid="{device_uuid}" AND type="{sensor_type}" {maybe_start_clause} {maybe_end_clause}) / 2')
+    elif metric == "mean":
+        cur.execute(
+            f'SELECT AVG(value) FROM readings WHERE device_uuid="{device_uuid}" '
+            f'{maybe_sensor_clause} {maybe_start_clause} {maybe_end_clause}')
+    elif metric == "mode":
+        cur.execute(
+            f'SELECT value, COUNT(value) as value FROM readings '
+            f'WHERE device_uuid="{device_uuid}" '
+            f'{maybe_sensor_clause} {maybe_start_clause} {maybe_end_clause} '
+            f'GROUP BY value ORDER BY value DESC')
+
+    row = cur.fetchone()
+    return row
+
+
+def get_quartiles(device_uuid, sensor_type, start, end):
+    cur, _ = db_connection()
+    maybe_start_clause = ""
+    maybe_end_clause = ""
+    maybe_sensor_clause = ""
+    if start is not None:
+        maybe_start_clause = f"AND date_created > {start}"
+    if end is not None:
+        maybe_end_clause = f"AND date_created < {end}"
+    if sensor_type is not None:
+        maybe_sensor_clause = f'AND type = "{sensor_type}"'
+
+    # get total number of items matching clause,
+    cur.execute(f'SELECT value FROM readings WHERE device_uuid="{device_uuid}"'
+                f'{maybe_sensor_clause} {maybe_start_clause} {maybe_end_clause}')
+    rows = cur.fetchall()
+    values = [cols[0] for cols in rows]
+
+    quartile_1 = None
+    quartile_3 = None
+
+    if values:
+        quartile_1_index = int(len(values) * 0.25)
+        quartile_3_index = int(len(values) * 0.75)
+        quartile_1 = values[quartile_1_index]
+        quartile_3 = values[quartile_3_index]
+
+    return [quartile_1, quartile_3]
+
+
+def get_number_of_readings(device_uuid):
+    cur, _ = db_connection()
+    cur.execute(f'SELECT COUNT(*) FROM readings WHERE device_uuid="{device_uuid}"')
+    number = cur.fetchone()
+    return number[0]
+
+
+def get_device_uuids():
+    cur, _ = db_connection()
+    cur.execute(f'SELECT device_uuid FROM readings')
+    uuids = cur.fetchall()
+    # flatten and unique
+    return sorted(list(set([item for sublist in uuids for item in sublist])))
 
 
 @app.route('/devices/<string:device_uuid>/readings/', methods=['POST'])
@@ -147,41 +235,17 @@ def request_device_readings_operation(device_uuid, metric):
     elif not valid_epoch(end):
         return f"Invalid end time: {end}", 400
 
-    cur, _ = db_connection()
-
-    maybe_start_clause = ""
-    maybe_end_clause = ""
-    if start is not None:
-        maybe_start_clause = f"AND date_created > {start}"
-    if end is not None:
-        maybe_end_clause = f"AND date_created < {end}"
-
     if metric == "min":
-        cur.execute(
-            f'SELECT MIN(value) FROM readings WHERE '
-            f'device_uuid= "{device_uuid}" AND type="{sensor_type}" {maybe_start_clause} {maybe_end_clause}')
+        row = get_metric(metric, device_uuid, sensor_type, start, end)
     elif metric == "max":
-        cur.execute(
-            f'SELECT MAX(value) FROM readings WHERE '
-            f'device_uuid= "{device_uuid}" AND type="{sensor_type}" {maybe_start_clause} {maybe_end_clause}')
+        row = get_metric(metric, device_uuid, sensor_type, start, end)
     elif metric == "median":
-        cur.execute(
-            f'SELECT value FROM readings WHERE device_uuid="{device_uuid}" AND '
-            f'type="{sensor_type}" {maybe_start_clause} {maybe_end_clause} ORDER BY '
-            f'value LIMIT 1 OFFSET (SELECT COUNT(*) FROM readings WHERE '
-            f'device_uuid="{device_uuid}" AND type="{sensor_type}" {maybe_start_clause} {maybe_end_clause}) / 2')
+        row = get_metric(metric, device_uuid, sensor_type, start, end)
     elif metric == "mean":
-        cur.execute(
-            f'SELECT AVG(value) FROM readings WHERE device_uuid="{device_uuid}" AND '
-            f'type="{sensor_type}" {maybe_start_clause} {maybe_end_clause}')
+        row = get_metric(metric, device_uuid, sensor_type, start, end)
     elif metric == "mode":
-        cur.execute(
-            f'SELECT value, COUNT(value) as value FROM readings '
-            f'WHERE device_uuid="{device_uuid}" AND '
-            f'type="{sensor_type}" {maybe_start_clause} {maybe_end_clause} '
-            f'GROUP BY value ORDER BY value DESC')
+        row = get_metric(metric, device_uuid, sensor_type, start, end)
 
-    row = cur.fetchone()
     # Return success
     return jsonify({"value": float(f'{row[0]:.2f}')}), 200
 
@@ -207,45 +271,58 @@ def request_device_readings_quartiles(device_uuid):
         return f"Invalid start time: {start}", 400
     elif not valid_epoch(end):
         return f"Invalid end time: {end}", 400
-    cur, _ = db_connection()
-    maybe_start_clause = ""
-    maybe_end_clause = ""
-    if start is not None:
-        maybe_start_clause = f"AND date_created > {start}"
-    if end is not None:
-        maybe_end_clause = f"AND date_created < {end}"
 
-    # get total number of items matching clause,
-    cur.execute(f'SELECT value FROM readings WHERE device_uuid="{device_uuid}"'
-                f'AND type="{sensor_type}" {maybe_start_clause} {maybe_end_clause}')
-    rows = cur.fetchall()
-    values = [cols[0] for cols in rows]
+    quartiles = get_quartiles(device_uuid, sensor_type, start, end)
 
-    quartile_1 = None
-    quartile_3 = None
-
-    if values:
-        quartile_1_index = int(len(values) * 0.25)
-        quartile_3_index = int(len(values) * 0.75)
-        quartile_1 = values[quartile_1_index]
-        quartile_3 = values[quartile_3_index]
-
-    return jsonify({"quartile_1": quartile_1, "quartile_3": quartile_3})
+    return jsonify({"quartile_1": quartiles[0], "quartile_3": quartiles[1]})
 
 
-# @app.route('<fill-this-in>', methods = ['GET'])
-# def request_readings_summary():
-#     """
-#     This endpoint allows clients to GET a full summary
-#     of all sensor data in the database per device.
-#
-#     Optional Query Parameters
-#     * type -> The type of sensor value a client is looking for
-#     * start -> The epoch start time for a sensor being created
-#     * end -> The epoch end time for a sensor being created
-#     """
-#
-#     return 'Endpoint is not implemented', 501
+@app.route('/devices/readings/summary/', methods=['GET'])
+def request_readings_summary():
+    """
+    This endpoint allows clients to GET a full summary
+    of all sensor data in the database per device.
+
+    Optional Query Parameters
+    * type -> The type of sensor value a client is looking for
+    * start -> The epoch start time for a sensor being created
+    * end -> The epoch end time for a sensor being created
+    """
+    data = request.args
+    sensor_type, start, end = data.get('type'), data.get('start'), data.get('end')
+
+    if sensor_type and not valid_sensor_type(sensor_type):
+        return f"Invalid sensor type: {sensor_type}", 400
+    elif not valid_epoch(start):
+        return f"Invalid start time: {start}", 400
+    elif not valid_epoch(end):
+        return f"Invalid end time: {end}", 400
+
+    output = []
+    uuids = get_device_uuids()
+
+    for device_uuid in uuids:
+        number_of_readings = get_number_of_readings(device_uuid)
+        metric_max = get_metric('max', device_uuid, sensor_type, start, end)
+        metric_median = get_metric('median', device_uuid, sensor_type, start, end)
+        metric_mean = get_metric('mean', device_uuid, sensor_type, start, end)
+        quartiles = get_quartiles(device_uuid, sensor_type, start, end)
+
+        reading = {
+            'device_uuid': device_uuid,
+            'number_of_readings': number_of_readings,
+            'max_reading_value': float(f'{metric_max[0]:.2f}'),
+            'median_reading_value': float(f'{metric_median[0]:.2f}'),
+            'mean_reading_value': float(f'{metric_mean[0]:.2f}'),
+            'quartile_1_value': quartiles[0],
+            'quartile_3_value': quartiles[1]
+        }
+
+        output.append(reading)
+
+    # Return success
+    return jsonify(output), 200
+
 
 if __name__ == '__main__':
     app.run()

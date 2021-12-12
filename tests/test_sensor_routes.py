@@ -6,20 +6,22 @@ import unittest
 
 from app import app
 
+
 class SensorRoutesTestCases(unittest.TestCase):
 
     def setUp(self):
         # Setup the SQLite DB
         conn = sqlite3.connect('test_database.db')
         conn.execute('DROP TABLE IF EXISTS readings')
-        conn.execute('CREATE TABLE IF NOT EXISTS readings (device_uuid TEXT, type TEXT, value INTEGER, date_created INTEGER)')
-        
+        conn.execute(
+            'CREATE TABLE IF NOT EXISTS readings (device_uuid TEXT, type TEXT, value INTEGER, date_created INTEGER)')
+
         self.device_uuid = 'test_device'
 
         # Setup some sensor data
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        
+
         cur.execute('insert into readings (device_uuid,type,value,date_created) VALUES (?,?,?,?)',
                     (self.device_uuid, 'temperature', 22, int(time.time()) - 100))
         cur.execute('insert into readings (device_uuid,type,value,date_created) VALUES (?,?,?,?)',
@@ -50,7 +52,7 @@ class SensorRoutesTestCases(unittest.TestCase):
         request = self.client().get('/devices/{}/readings/'.format(self.device_uuid))
 
         # Then we should receive a 200
-        self.assertEqual(request.status_code, 200)
+        assert request.status_code == 200
 
         # And the response data should have three sensor readings
         assert len(request.json) == 6
@@ -59,13 +61,13 @@ class SensorRoutesTestCases(unittest.TestCase):
         # Given a device UUID
         # When we make a request with the given UUID to create a reading
         request = self.client().post('/devices/{}/readings/'.format(self.device_uuid), data=
-            json.dumps({
-                'type': 'temperature',
-                'value': 100 
-            }))
+        json.dumps({
+            'type': 'temperature',
+            'value': 100
+        }))
 
         # Then we should receive a 201
-        self.assertEqual(201, request.status_code, request.data)
+        assert request.status_code == 201
 
         # And when we check for readings in the db
         conn = sqlite3.connect('test_database.db')
@@ -171,7 +173,20 @@ class SensorRoutesTestCases(unittest.TestCase):
         """
         start = int(time.time()) - 120
         end = int(time.time())
-        request = self.client().get(f'/devices/{self.device_uuid}/readings/quartiles/?type=temperature&start={start}&end={end}')
+        request = self.client().get(
+            f'/devices/{self.device_uuid}/readings/quartiles/?type=temperature&start={start}&end={end}')
 
         assert request.status_code == 200
         assert request.json == {'quartile_1': 22, 'quartile_3': 50}
+
+    def test_device_readings_summary(self):
+        request = self.client().get(f'/devices/readings/summary/')
+
+        assert request.status_code == 200
+        assert request.json == [
+            {'device_uuid': 'other_uuid', 'max_reading_value': 42.0, 'mean_reading_value': 32.0,
+             'median_reading_value': 22.0, 'number_of_readings': 2, 'quartile_1_value': 22,
+             'quartile_3_value': 42},
+            {'device_uuid': 'test_device', 'max_reading_value': 100.0, 'mean_reading_value': 57.33,
+             'median_reading_value': 22.0, 'number_of_readings': 6, 'quartile_1_value': 50,
+             'quartile_3_value': 50}]
